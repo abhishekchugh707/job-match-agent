@@ -52,3 +52,23 @@ def test_search_finds_the_matching_job_once(conn):
     assert len({h.job_id for h in hits}) == 5                 # one chunk per job
     assert "fjord-platform" in {h.job_id for h in hits}
     assert hits == sorted(hits, key=lambda h: -h.score)        # best first
+
+
+def test_filters_are_exact(conn):
+    from app.search import Filters
+    jobs = load_jobs(DEMO_FILE)
+    ingest(conn, FakeEmbedder(), jobs)
+    level = {j["id"]: j["german"] for j in jobs}
+    remote = {j["id"]: j["remote"] for j in jobs}
+
+    hits = search(conn, FakeEmbedder(), "backend developer", k=25, filters=Filters(german="none"))
+    assert hits and all(level[h.job_id] == "none" for h in hits)
+
+    hits = search(conn, FakeEmbedder(), "backend developer", k=25, filters=Filters(max_german="B2"))
+    assert {level[h.job_id] for h in hits} == {"none", "B2"}
+
+    hits = search(conn, FakeEmbedder(), "engineer", k=25, filters=Filters(remote=True))
+    assert hits and all(remote[h.job_id] for h in hits)
+
+    hits = search(conn, FakeEmbedder(), "engineer", k=25, filters=Filters(location="cologne"))
+    assert hits and all("Cologne" in h.location for h in hits)
