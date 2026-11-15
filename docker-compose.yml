@@ -1,0 +1,21 @@
+# Local PostgreSQL with the pgvector extension (vector similarity search).
+# Start:  docker compose up -d      Stop:  docker compose down
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: jobmatch
+      POSTGRES_PASSWORD: jobmatch      # local development only
+      POSTGRES_DB: jobmatch
+    ports:
+      - "5433:5432"                    # 5433 on your machine, so it can't clash with another Postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobmatch -d jobmatch"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
