@@ -10,6 +10,7 @@ venv/
 
 # Local data
 data/private/
+.cache/
 *.log
 
 # OS / editor
