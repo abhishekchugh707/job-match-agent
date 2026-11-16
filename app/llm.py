@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Callable, Protocol, TypeVar
+from typing import Callable, Protocol, Sequence, TypeVar
 
 # Errors worth a second try: rate limit (429) and temporary server problems (500/502/503/504).
 TRANSIENT = {429, 500, 502, 503, 504}
@@ -41,6 +41,31 @@ def with_retries(call: Callable[[], T], attempts: int = 4, sleep: Callable[[floa
     raise RuntimeError("unreachable")
 
 
+def with_fallback(models: Sequence[str], call: Callable[[str], T], attempts: int = 4,
+                  sleep: Callable[[float], None] = time.sleep) -> tuple[str, T]:
+    """Run call(model) on the first model that answers; return (model used, result).
+
+    A model that is still busy after its retries is skipped for the next one. Models that still have a
+    fallback after them get only 2 attempts, so we don't wait minutes on one model while another is free.
+    Real errors (bad key, bad request) are raised at once: another model would not fix them."""
+    last: LLMUnavailable | None = None
+    for i, m in enumerate(models):
+        tries = attempts if i == len(models) - 1 else min(attempts, 2)
+        try:
+            return m, with_retries(lambda: call(m), tries, sleep)
+        except LLMUnavailable as e:
+            last = e
+    raise LLMUnavailable(f"Gemini is busy or timed out on every model tried ({', '.join(models)}), "
+                         "try again in a minute.") from last
+
+
+def thinking_for(types, model: str):
+    """Keep thinking short. Gemini 3+ models take a thinking level; 2.x models take a token budget instead."""
+    if model.startswith("gemini-2"):
+        return types.ThinkingConfig(thinking_budget=1024)
+    return types.ThinkingConfig(thinking_level="low")
+
+
 def gemini_client(api_key: str, timeout_s: int = 60):
     from google import genai
     from google.genai import types
@@ -51,20 +76,24 @@ def gemini_client(api_key: str, timeout_s: int = 60):
 
 class GeminiLLM:
     def __init__(self, api_key: str, model: str, timeout_s: int = 60, attempts: int = 4,
-                 client=None, sleep: Callable[[float], None] = time.sleep):
+                 client=None, sleep: Callable[[float], None] = time.sleep, fallbacks: Sequence[str] = ()):
         from google.genai import types
         self.client = client or gemini_client(api_key, timeout_s)
         self.model, self.types, self.attempts, self.sleep = model, types, attempts, sleep
+        self.models = [model, *[f for f in fallbacks if f and f != model]]
+        self.last_model: str | None = None      # which model answered the last call
 
     def generate(self, prompt: str, system: str = "") -> str:
         t = self.types
-        cfg = t.GenerateContentConfig(
-            system_instruction=system or None,
-            temperature=0.2,                                   # low: stick to the given postings
-            thinking_config=t.ThinkingConfig(thinking_level="low"),
-        )
-        r = with_retries(lambda: self.client.models.generate_content(model=self.model, contents=prompt, config=cfg),
-                         self.attempts, self.sleep)
+        def cfg(m: str):
+            return t.GenerateContentConfig(
+                system_instruction=system or None,
+                temperature=0.2,                               # low: stick to the given postings
+                thinking_config=thinking_for(t, m),
+            )
+        self.last_model, r = with_fallback(
+            self.models, lambda m: self.client.models.generate_content(model=m, contents=prompt, config=cfg(m)),
+            self.attempts, self.sleep)
         return (r.text or "").strip()
 
 

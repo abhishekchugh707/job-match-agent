@@ -24,7 +24,7 @@ def main() -> int:
 
     s = get_settings()
     embedder = GeminiEmbedder(api_key=s.gemini_api_key, model=s.gemini_embed_model)
-    llm = GeminiLLM(api_key=s.gemini_api_key, model=s.gemini_model)
+    llm = GeminiLLM(api_key=s.gemini_api_key, model=s.gemini_model, fallbacks=s.gemini_fallback_models)
     with connect(s.database_url) as conn:
         try:
             a = ask(conn, embedder, llm, args.question, k=args.k, filters=filters_from_args(args))
@@ -41,6 +41,7 @@ def main() -> int:
         print("(* = cited in the answer)")
     if a.invalid_citations:
         print(f"\nRemoved invented citations: {', '.join(a.invalid_citations)}")
+    print(f"\n(model: {llm.last_model})")
     return 0
 
 

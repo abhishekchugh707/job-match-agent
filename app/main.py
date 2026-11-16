@@ -39,12 +39,12 @@ def get_embedder() -> Embedder:
 @lru_cache
 def get_llm() -> LLM:
     s = get_settings()
-    return GeminiLLM(api_key=s.gemini_api_key, model=s.gemini_model)
+    return GeminiLLM(api_key=s.gemini_api_key, model=s.gemini_model, fallbacks=s.gemini_fallback_models)
 
 
 def get_agent_model() -> AgentModel:
     s = get_settings()
-    return GeminiAgentModel(api_key=s.gemini_api_key, model=s.gemini_model)   # one per request: it holds the conversation
+    return GeminiAgentModel(api_key=s.gemini_api_key, model=s.gemini_model, fallbacks=s.gemini_fallback_models)   # one per request: it holds the conversation
 
 
 def get_conn():

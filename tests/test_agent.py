@@ -119,3 +119,28 @@ def test_gemini_adapter_switches_tools_off_when_asked():
     _, config = client.requests[0]
     assert config.tool_config.function_calling_config.mode == "NONE"
     assert model.config.tool_config is None                  # the original config is unchanged
+
+
+class BusyFirst(FakeGemini):
+    """Model 'main' is busy; every other model answers from the scripted responses."""
+
+    def __init__(self, *responses):
+        super().__init__(*responses)
+        self.models_called: list[str] = []
+        self.models = self
+
+    def generate_content(self, model, contents, config):
+        self.models_called.append(model)
+        if model == "main":
+            err = Exception("503 UNAVAILABLE")
+            err.code = 503
+            raise err
+        return super().generate_content(model, contents, config)
+
+
+def test_agent_falls_back_and_stays_on_the_model_that_answered():
+    client = BusyFirst(response(calls=[("search_jobs", {"query": "AI"})]), response(text="Done [job-a]."))
+    model = GeminiAgentModel(api_key="x", model="main", client=client, fallbacks=["backup"], sleep=lambda s: None)
+    r = run(model, tools([]), DECLS, "AI jobs?")
+    assert r.answer == "Done [job-a]." and r.model == "backup"
+    assert client.models_called == ["main", "main", "backup", "backup"]   # second step goes straight to backup

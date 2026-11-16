@@ -67,6 +67,7 @@ class AgentResult:
     stopped_by_limit: bool = False
     cited: list[str] = field(default_factory=list)
     invalid_citations: list[str] = field(default_factory=list)
+    model: str | None = None              # which Gemini model answered (None for test models)
 
 
 def _job_ids(result: Any) -> set[str]:
@@ -95,7 +96,7 @@ def run(model: AgentModel, tools: dict[str, Callable[..., dict]], declarations: 
         if not turn.calls or limited:
             text, valid, invalid = check_citations(turn.text, seen_ids)
             return AgentResult(question, text or "I couldn't find an answer with the available tools.",
-                               trace, limited, valid, invalid)
+                               trace, limited, valid, invalid, getattr(model, "model_used", None))
 
         results = []
         for call in turn.calls:
@@ -120,13 +121,21 @@ def run(model: AgentModel, tools: dict[str, Callable[..., dict]], declarations: 
 
 class GeminiAgentModel:
     """AgentModel on top of Gemini function calling. Keeps the conversation (including the model's
-    own turns, which carry its thought signatures) so each step sees everything so far."""
+    own turns, which carry its thought signatures) so each step sees everything so far.
 
-    def __init__(self, api_key: str, model: str, client=None, attempts: int = 4):
+    Fallback: until the first answer, a busy model is skipped for the next one in the list. After that
+    the conversation stays on the model that answered, because thought signatures belong to that model."""
+
+    def __init__(self, api_key: str, model: str, client=None, attempts: int = 4, fallbacks=(),
+                 sleep=None):
+        import time
+
         from google.genai import types
 
         from .llm import gemini_client
-        self.t, self.model, self.attempts = types, model, attempts
+        self.t, self.attempts, self.sleep = types, attempts, sleep or time.sleep
+        self.models = [model, *[f for f in fallbacks if f and f != model]]
+        self.model_used: str | None = None
         self.client = client or gemini_client(api_key)
         self.contents: list = []
         self.config = None
@@ -138,19 +147,20 @@ class GeminiAgentModel:
         self.config = t.GenerateContentConfig(
             system_instruction=system, temperature=0.2,
             tools=[t.Tool(function_declarations=decls)],
-            automatic_function_calling=t.AutomaticFunctionCallingConfig(disable=True),   # we run the loop
-            thinking_config=t.ThinkingConfig(thinking_level="low"))
+            automatic_function_calling=t.AutomaticFunctionCallingConfig(disable=True))   # we run the loop
         self.contents = [t.Content(role="user", parts=[t.Part(text=question)])]
 
     def step(self, allow_tools: bool = True) -> Turn:
-        from .llm import with_retries
+        from .llm import thinking_for, with_fallback
         t = self.t
         cfg = self.config
         if not allow_tools:
             cfg = cfg.model_copy(update={"tool_config": t.ToolConfig(
                 function_calling_config=t.FunctionCallingConfig(mode="NONE"))})
-        r = with_retries(lambda: self.client.models.generate_content(
-            model=self.model, contents=self.contents, config=cfg), self.attempts)
+        models = [self.model_used] if self.model_used else self.models
+        self.model_used, r = with_fallback(models, lambda m: self.client.models.generate_content(
+            model=m, contents=self.contents, config=cfg.model_copy(update={"thinking_config": thinking_for(t, m)})),
+            self.attempts, self.sleep)
         content = r.candidates[0].content if r.candidates else None
         if content is not None:
             self.contents.append(content)
@@ -180,7 +190,7 @@ def main() -> int:
 
     s = get_settings()
     embedder = GeminiEmbedder(api_key=s.gemini_api_key, model=s.gemini_embed_model)
-    model = GeminiAgentModel(api_key=s.gemini_api_key, model=s.gemini_model)
+    model = GeminiAgentModel(api_key=s.gemini_api_key, model=s.gemini_model, fallbacks=s.gemini_fallback_models)
     with connect(s.database_url) as conn:
         try:
             res = run(model, bind(ToolContext(conn, embedder)), DECLARATIONS, args.question, args.max_tool_calls)
@@ -188,6 +198,7 @@ def main() -> int:
             print(e)
             return 1
 
+    print(f"Model: {res.model}")
     print("Steps:")
     for i, st in enumerate(res.trace, 1):
         summary = st.result.get("error") or ", ".join(sorted(_job_ids(st.result))[:5]) or "ok"

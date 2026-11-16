@@ -13,6 +13,7 @@ from google import genai          # noqa: E402
 from google.genai import types    # noqa: E402
 
 from app.config import get_settings   # noqa: E402
+from app.llm import thinking_for       # noqa: E402
 
 
 def main() -> int:
@@ -41,16 +42,24 @@ def main() -> int:
     for n in sorted(embed):
         print("  ", n)
 
-    print(f"\nTest call with GEMINI_MODEL={s.gemini_model} ...")
-    try:
-        r = client.models.generate_content(
-            model=s.gemini_model,
-            contents="Reply with exactly: Gemini connection works.",
-            config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level="low")),
-        )
-        print("Answer:", (r.text or "").strip())
-    except Exception as e:   # show the real reason (wrong model name, quota, invalid key ...)
-        print("Chat call failed:", e)
+    # Test the main model and every fallback, so you know which ones answer right now.
+    models = [s.gemini_model, *[m for m in s.gemini_fallback_models if m != s.gemini_model]]
+    working = []
+    for m in models:
+        label = "GEMINI_MODEL" if m == s.gemini_model else "fallback"
+        print(f"\nTest call with {label}={m} ...")
+        try:
+            r = client.models.generate_content(
+                model=m,
+                contents="Reply with exactly: Gemini connection works.",
+                config=types.GenerateContentConfig(thinking_config=thinking_for(types, m)),
+            )
+            print("Answer:", (r.text or "").strip())
+            working.append(m)
+        except Exception as e:   # show the real reason (wrong model name, quota, busy, invalid key ...)
+            print("Chat call failed:", e)
+    if not working:
+        print("\nNo chat model answered. If they are busy (503/504), try again later.")
         return 1
 
     print(f"\nTest embedding with GEMINI_EMBED_MODEL={s.gemini_embed_model} ...")
@@ -61,7 +70,7 @@ def main() -> int:
         print("Embedding call failed:", ex)
         return 1
 
-    print("\nAll good.")
+    print(f"\nAll good. Answering right now: {', '.join(working)}")
     return 0
 
 
