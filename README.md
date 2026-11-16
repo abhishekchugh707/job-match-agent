@@ -1,5 +1,7 @@
 # Job Match Agent
 
+[![tests](https://github.com/abhishekchugh707/job-match-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/abhishekchugh707/job-match-agent/actions/workflows/tests.yml)
+
 Ask questions about job postings in plain language and get answers that point back to the postings they came from.
 
 ```
@@ -189,3 +191,7 @@ eval/results.md   latest evaluation report
 ## Stack
 
 Python 3.12, FastAPI, PostgreSQL with pgvector, psycopg 3, Google Gemini (google-genai SDK), the MCP Python SDK, pytest and GitHub Actions.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
