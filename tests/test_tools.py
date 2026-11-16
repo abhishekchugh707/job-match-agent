@@ -53,8 +53,32 @@ def test_tools_against_the_database(ctx):
     gap = skill_gap(ctx, "nordlicht-backend", ["python", "Docker", "postgres"])
     assert {"Python", "Docker", "PostgreSQL"} <= set(gap["matched"])
     assert "FastAPI" in gap["missing"]
+    assert "SQL" not in gap["missing"]                    # covered by PostgreSQL
 
     cmp = compare_jobs(ctx, ["nordlicht-backend", "kranich-ai-agents", "nope"])
     assert [j["job_id"] for j in cmp["jobs"]] == ["nordlicht-backend", "kranich-ai-agents"]
     assert cmp["unknown_ids"] == ["nope"]
     assert "error" in compare_jobs(ctx, ["only-one"])
+
+
+def test_compare_skills_counts_implied_skills():
+    from app.tools import compare_skills
+    r = compare_skills(["Python", "SQL", "TimescaleDB", "GitLab CI", "CI/CD", "Kafka"],
+                       ["python", "postgres", "GitLab", "FastAPI"])
+    assert r["matched"] == ["Python", "SQL", "GitLab CI", "CI/CD"]
+    assert r["implied"] == {"SQL": "PostgreSQL", "CI/CD": "GitLab CI"}
+    assert r["missing"] == ["TimescaleDB", "Kafka"]
+
+
+def test_compare_skills_reports_skills_the_job_does_not_ask_for():
+    from app.tools import compare_skills
+    r = compare_skills(["Python", "LLMs", "RAG"], ["Python", "Docker", "PostgreSQL", "Excel"])
+    assert r["missing"] == ["LLMs", "RAG"]
+    assert r["not_asked_for"] == ["Docker", "PostgreSQL", "Excel"]   # unknown skills are kept as given
+    assert r["implied"] == {}
+
+
+def test_implied_skill_does_not_count_the_other_way():
+    from app.tools import compare_skills
+    r = compare_skills(["PostgreSQL"], ["SQL"])           # knowing SQL doesn't mean knowing PostgreSQL
+    assert r["missing"] == ["PostgreSQL"]

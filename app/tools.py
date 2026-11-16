@@ -57,6 +57,33 @@ def canonical(skill: str) -> str:
     return _ALIASES.get(_norm(skill), skill.strip())
 
 
+# Knowing the left-hand skill covers the ones on the right (kept short and uncontroversial).
+IMPLIES: dict[str, set[str]] = {
+    "PostgreSQL": {"SQL"}, "TimescaleDB": {"PostgreSQL", "SQL"}, "Oracle": {"SQL"},
+    "Snowflake": {"SQL"}, "BigQuery": {"SQL"},
+    "GitLab CI": {"CI/CD"}, "GitHub Actions": {"CI/CD"},
+}
+
+
+def compare_skills(needed: list[str], skills: list[str]) -> dict:
+    """Split a posting's technologies into matched and missing for someone with these skills.
+
+    matched: in the posting and covered by the skills (directly or through IMPLIES)
+    implied: for matches that came through IMPLIES, which of the user's skills covers them
+    missing: in the posting, not covered
+    not_asked_for: the user's skills the posting doesn't mention (not a gap, just not required)"""
+    have = list(dict.fromkeys(canonical(x) for x in skills if x.strip()))
+    via: dict[str, str] = {}
+    for h in have:
+        for covered in IMPLIES.get(h, ()):
+            via.setdefault(covered, h)
+    matched = [t for t in needed if t in have or t in via]
+    return {"matched": matched,
+            "implied": {t: via[t] for t in matched if t not in have},
+            "missing": [t for t in needed if t not in matched],
+            "not_asked_for": [h for h in have if h not in needed]}
+
+
 @dataclass
 class ToolContext:
     conn: Any
@@ -95,11 +122,8 @@ def skill_gap(ctx: ToolContext, job_id: str, skills: list[str]) -> dict:
     if not job:
         return {"error": f"no job with id '{job_id}'"}
     needed = technologies(job["description"])
-    have = {canonical(s) for s in skills}
     return {"job_id": job_id, "title": job["title"], "company": job["company"], "german": job["german"],
-            "technologies_in_posting": needed,
-            "matched": [t for t in needed if t in have],
-            "missing": [t for t in needed if t not in have]}
+            "technologies_in_posting": needed} | compare_skills(needed, skills)
 
 
 def compare_jobs(ctx: ToolContext, job_ids: list[str]) -> dict:
@@ -135,8 +159,10 @@ DECLARATIONS: list[dict] = [
      "description": "Full text and details of one job posting. Use it when you need the exact requirements.",
      "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"]}},
     {"name": "skill_gap",
-     "description": "Compare a job's technologies with a list of skills: which ones match, which are missing. "
-                    "Only use it when the user has told you their skills.",
+     "description": "Compare a job's technologies with a list of skills. Returns matched (including skills "
+                    "covered by related ones, e.g. PostgreSQL covers SQL, see 'implied'), missing (what the job "
+                    "asks for that the skills don't cover) and not_asked_for (the user's skills the job doesn't "
+                    "mention; these are not gaps). Only use it when the user has told you their skills.",
      "parameters": {"type": "object", "properties": {
          "job_id": {"type": "string"},
          "skills": {"type": "array", "items": {"type": "string"}, "description": "the user's skills"}},
