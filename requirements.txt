@@ -3,3 +3,4 @@ uvicorn[standard]>=0.30
 google-genai>=1.0
 python-dotenv>=1.0
 psycopg[binary]>=3.2
+mcp>=2.3,<3             # MCP server (app/mcp_server.py)
