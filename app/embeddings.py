@@ -26,6 +26,15 @@ BATCH = 50                      # texts per request
 CACHE_PATH = Path(".cache/embeddings.sqlite")
 
 
+class EmbeddingQuotaExhausted(RuntimeError):
+    """The free tier's daily embedding limit is used up. Waiting a minute won't help; it resets daily."""
+
+
+def _is_daily_quota(error: Exception) -> bool:
+    text = str(error)
+    return ("429" in text or "RESOURCE_EXHAUSTED" in text) and ("PerDay" in text or "per day" in text.lower())
+
+
 class Embedder(Protocol):
     dim: int
 
@@ -75,6 +84,10 @@ class GeminiEmbedder:
                 r = self.client.models.embed_content(model=self.model, contents=texts, config=cfg)
                 return [normalize(list(e.values)) for e in r.embeddings]
             except Exception as e:                       # free tier: back off on "too many requests"
+                if _is_daily_quota(e):                   # retrying can't fix a daily limit: stop now
+                    raise EmbeddingQuotaExhausted(
+                        "Daily Gemini embedding limit reached. Everything embedded so far is saved in the "
+                        "cache; run the same command again after the limit resets (about once a day).") from e
                 if "429" not in str(e) and "RESOURCE_EXHAUSTED" not in str(e) or attempt == 4:
                     raise
                 time.sleep(min(60, 5 * 2 ** attempt))

@@ -71,7 +71,7 @@ def ingest(conn, embedder: Embedder, jobs: list[dict]) -> dict:
 
 def main() -> int:
     from .config import get_settings
-    from .embeddings import GeminiEmbedder
+    from .embeddings import EmbeddingQuotaExhausted, GeminiEmbedder
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--file", type=Path, default=DEMO_FILE)
@@ -87,7 +87,11 @@ def main() -> int:
     with connect(s.database_url) as conn:
         if args.reset:
             reset(conn)
-        counts = ingest(conn, embedder, load_jobs(args.file))
+        try:
+            counts = ingest(conn, embedder, load_jobs(args.file))
+        except EmbeddingQuotaExhausted as e:
+            print(e)
+            return 1
     print(f"Stored {counts['jobs']} jobs ({counts['chunks']} chunks), {counts['skipped']} unchanged.")
     return 0
 
