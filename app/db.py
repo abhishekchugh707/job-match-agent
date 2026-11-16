@@ -15,6 +15,19 @@ def connect(database_url: str) -> psycopg.Connection:
     return psycopg.connect(database_url, autocommit=False)
 
 
+def ensure_database(database_url: str) -> str:
+    """Create the database if it doesn't exist yet (used for the separate private database).
+    Returns the database name."""
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    name = conninfo_to_dict(database_url).get("dbname", "")
+    with psycopg.connect(make_conninfo(database_url, dbname="postgres"), autocommit=True) as admin:
+        if not admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone():
+            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    return name
+
+
 def to_pgvector(v: list[float]) -> str:
     return "[" + ",".join(f"{x:.7g}" for x in v) + "]"
 

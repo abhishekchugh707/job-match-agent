@@ -4,6 +4,9 @@
     python -m app.ingest --file my_jobs.json  # your own file, same format
     python -m app.ingest --reset              # drop the tables first
 
+With JOBMATCH_DATA=private everything goes to a separate database (created on first use), so your
+own jobs never mix with the demo data. See app/import_scanner.py for importing Job Scanner jobs.
+
 A job whose content hasn't changed since the last run is skipped, so re-running is cheap.
 """
 from __future__ import annotations
@@ -14,7 +17,7 @@ import json
 from pathlib import Path
 
 from .chunking import chunk_job
-from .db import connect, init_schema, reset, stored_dim, to_pgvector
+from .db import connect, ensure_database, init_schema, reset, stored_dim, to_pgvector
 from .embeddings import Embedder
 
 DEMO_FILE = Path(__file__).resolve().parent.parent / "data" / "demo_jobs.json"
@@ -76,6 +79,10 @@ def main() -> int:
     args = ap.parse_args()
 
     s = get_settings()
+    if s.data_set == "private" and args.file == DEMO_FILE:
+        print("JOBMATCH_DATA=private: pass your own file with --file (demo data stays in the demo database).")
+        return 1
+    print(f"Database: {ensure_database(s.database_url)} ({s.data_set} data)")
     embedder = GeminiEmbedder(api_key=s.gemini_api_key, model=s.gemini_embed_model)
     with connect(s.database_url) as conn:
         if args.reset:

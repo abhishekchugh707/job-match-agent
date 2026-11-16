@@ -160,6 +160,24 @@ Docker has to be running, because the tools read from the database.
 
 `python -m app.ingest --file my_jobs.json` loads any file in the same format as `data/demo_jobs.json`. Unchanged jobs are skipped on the next run. Keep real postings in `data/private/`, which git ignores.
 
+### Using it with Job Scanner
+
+I use this together with my other project, [Job Scanner](https://github.com/abhishekchugh707/job-scanner), which collects new postings from company careers pages. The importer reads the scanner's database and keeps the jobs worth asking about: not skipped, not a low match, with a readable description, from the last 30 days.
+
+```bash
+python -m app.import_scanner --db path/to/job-scanner/jobs.db   # writes data/private/my_jobs.json
+```
+
+Real jobs go into their own database, so they never mix with the demo data or change the evaluation. Set `JOBMATCH_DATA=private` (in `.env`, or in the terminal) and every command uses a separate `jobmatch_private` database, created on first use:
+
+```bash
+export JOBMATCH_DATA=private        # Windows PowerShell: $env:JOBMATCH_DATA="private"
+python -m app.ingest --file data/private/my_jobs.json
+python -m app.agent "Which of these jobs fit Python and FastAPI best, and what am I missing?"
+```
+
+The scanner database is opened read-only, and only the fields this project needs are copied. Scores, notes and LinkedIn contacts stay in the scanner. The German level is derived from the scanner's language check: jobs that ask for German or are written in German count as B2, the rest as none.
+
 ## Tests
 
 ```bash
@@ -183,6 +201,7 @@ app/
   agent.py        the tool-calling loop
   mcp_server.py   the same tools over MCP
   evaluate.py     retrieval metrics and answer checks
+  import_scanner.py  import jobs from a Job Scanner database
   main.py         FastAPI app
 data/             demo postings and evaluation questions
 eval/results.md   latest evaluation report

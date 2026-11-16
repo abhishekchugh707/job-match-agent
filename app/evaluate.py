@@ -202,6 +202,9 @@ def main() -> int:
     args = ap.parse_args()
 
     s = get_settings()
+    if s.data_set != "demo":
+        print("The evaluation questions are about the demo jobs. Unset JOBMATCH_DATA to run it.")
+        return 1
     questions = load_questions()
     embedder = GeminiEmbedder(api_key=s.gemini_api_key, model=s.gemini_embed_model)
     with connect(s.database_url) as conn:
