@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -110,6 +111,7 @@ class AnswerRow:
     invalid: list[str]
     declined: bool
     ok: bool
+    model: str | None = None              # which model wrote it (None: no model call was needed)
 
 
 def check_answer(q: Question, text: str, cited: list[str], invalid: list[str]) -> AnswerRow:
@@ -127,8 +129,12 @@ def run_answers(conn, embedder, llm, questions: list[Question], pause_s: float =
     for i, q in enumerate(questions):
         if i:
             sleep(pause_s)                     # stay under the free-tier requests-per-minute limit
+        if hasattr(llm, "last_model"):
+            llm.last_model = None              # so a question answered without a model call shows None
         a = ask(conn, embedder, llm, q.question, filters=Filters(**q.filters) if q.filters else None)
-        rows.append(check_answer(q, a.text, a.cited, a.invalid_citations))
+        row = check_answer(q, a.text, a.cited, a.invalid_citations)
+        row.model = getattr(llm, "last_model", None)     # the fallback may switch models mid-run
+        rows.append(row)
     return rows
 
 
@@ -139,7 +145,7 @@ def _pct(x: float) -> str:
 
 
 def report(with_filters: list[RetrievalRow], without_filters: list[RetrievalRow], k: int,
-           answers: list[AnswerRow] | None = None, model: str | None = None) -> str:
+           answers: list[AnswerRow] | None = None) -> str:
     lines = [f"# Evaluation results ({date.today().isoformat()})", "",
              f"## Retrieval (top {k} jobs)", "",
              "| Questions | Hit rate | Recall | MRR |", "|---|---|---|---|"]
@@ -165,7 +171,9 @@ def report(with_filters: list[RetrievalRow], without_filters: list[RetrievalRow]
     if answers is not None:
         ans = [r for r in answers if r.answerable]
         un = [r for r in answers if not r.answerable]
-        lines += ["", "## Answers" + (f" ({model})" if model else ""), "",
+        models = Counter(r.model for r in answers if r.model)
+        used = ", ".join(f"{m}: {n}" for m, n in models.most_common())
+        lines += ["", "## Answers" + (f" ({used})" if used else ""), "",
                   "| Check | Result |", "|---|---|",
                   f"| cites a correct job | {sum(r.ok for r in ans)}/{len(ans)} |",
                   f"| no invented citations | {sum(not r.invalid for r in answers)}/{len(answers)} |",
@@ -199,7 +207,7 @@ def main() -> int:
     with connect(s.database_url) as conn:
         with_f = run_retrieval(conn, embedder, questions, args.k)
         without_f = run_retrieval(conn, embedder, questions, args.k, use_filters=False)
-        answers, model = None, None
+        answers = None
         if args.answers:
             llm = GeminiLLM(api_key=s.gemini_api_key, model=s.gemini_model, fallbacks=s.gemini_fallback_models)
             print(f"Checking {len(questions)} answers (a few seconds each) ...")
@@ -208,9 +216,8 @@ def main() -> int:
             except LLMUnavailable as e:
                 print(e)
                 return 1
-            model = llm.last_model
 
-    text = report(with_f, without_f, args.k, answers, model)
+    text = report(with_f, without_f, args.k, answers)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
