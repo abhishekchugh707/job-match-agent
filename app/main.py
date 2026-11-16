@@ -3,6 +3,7 @@
 GET  /health          the API process is up
 GET  /search?q=...    semantic search over the stored job postings (optional exact filters)
 POST /ask             answer a question from the postings, with citations (RAG)
+POST /agent           tool-calling agent: the model decides which tools to use; returns answer + trace
 
 Interactive docs: http://localhost:8000/docs
 """
@@ -19,10 +20,12 @@ from .config import get_settings
 from .db import connect
 from .embeddings import Embedder, GeminiEmbedder
 from .llm import LLM, GeminiLLM, LLMUnavailable
+from .agent import AgentModel, GeminiAgentModel, run as run_agent
 from .rag import ask
 from .search import Filters, search
+from .tools import DECLARATIONS, ToolContext, bind
 
-app = FastAPI(title="Job Match Agent", version="0.3.0")
+app = FastAPI(title="Job Match Agent", version="0.4.0")
 
 German = Literal["none", "B2", "C1"]
 
@@ -37,6 +40,11 @@ def get_embedder() -> Embedder:
 def get_llm() -> LLM:
     s = get_settings()
     return GeminiLLM(api_key=s.gemini_api_key, model=s.gemini_model)
+
+
+def get_agent_model() -> AgentModel:
+    s = get_settings()
+    return GeminiAgentModel(api_key=s.gemini_api_key, model=s.gemini_model)   # one per request: it holds the conversation
 
 
 def get_conn():
@@ -82,3 +90,18 @@ def ask_question(req: AskRequest, conn=Depends(get_conn), embedder: Embedder = D
         return asdict(ask(conn, embedder, llm, req.question, k=req.k, filters=f))
     except LLMUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+class AgentRequest(BaseModel):
+    question: str = Field(..., min_length=3)
+    max_tool_calls: int = Field(6, ge=1, le=10)
+
+
+@app.post("/agent")
+def agent(req: AgentRequest, conn=Depends(get_conn), embedder: Embedder = Depends(get_embedder),
+          model: AgentModel = Depends(get_agent_model)) -> dict:
+    try:
+        res = run_agent(model, bind(ToolContext(conn, embedder)), DECLARATIONS, req.question, req.max_tool_calls)
+    except LLMUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return asdict(res)

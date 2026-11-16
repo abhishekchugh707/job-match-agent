@@ -75,3 +75,44 @@ def test_ask_endpoint_answers_with_valid_citations_only():
     assert body["invalid_citations"] == ["invented-job"]
     assert "invented-job" not in body["text"]
     assert len(body["cited"]) == 1 and body["cited"][0] in {s["job_id"] for s in body["sources"]}
+
+
+@pytest.mark.skipif(not URL, reason="TEST_DATABASE_URL not set")
+def test_agent_endpoint_returns_answer_and_trace():
+    from app.agent import ToolCall, Turn
+    from app.main import get_agent_model
+
+    class Scripted:
+        def __init__(self):
+            self.turns = [Turn(calls=[ToolCall("search_jobs", {"query": "LLM agents", "max_german": "none"})]),
+                          Turn(text="Kranich builds agents [kranich-ai-agents].")]
+
+        def start(self, system, question, tools):
+            pass
+
+        def step(self, allow_tools=True):
+            return self.turns.pop(0)
+
+        def add_results(self, results):
+            pass
+
+    c = connect(URL)
+    reset(c)
+    ingest(c, FakeEmbedder(), load_jobs(DEMO_FILE))
+
+    def conn_override():
+        yield c
+
+    app.dependency_overrides[get_conn] = conn_override
+    app.dependency_overrides[get_embedder] = lambda: FakeEmbedder()
+    app.dependency_overrides[get_agent_model] = lambda: Scripted()
+    try:
+        r = TestClient(app).post("/agent", json={"question": "Which jobs build AI agents?"})
+    finally:
+        app.dependency_overrides.clear()
+        reset(c)
+        c.close()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["trace"][0]["tool"] == "search_jobs"
+    assert body["trace"][0]["args"] == {"query": "LLM agents", "max_german": "none"}
